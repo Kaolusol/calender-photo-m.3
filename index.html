@@ -429,6 +429,27 @@
             box-shadow: 0 4px 6px -1px rgba(96, 165, 250, 0.3), 0 2px 4px -1px rgba(96, 165, 250, 0.1);
         }
 
+        /* Google Sign-in button style */
+        .btn-google {
+            background-color: #4285F4; /* Google blue */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn-google:hover {
+            background-color: #357ae8;
+            box-shadow: 0 4px 6px -1px rgba(66, 133, 244, 0.3), 0 2px 4px -1px rgba(66, 133, 244, 0.1);
+        }
+
         /* Loading Indicator Styles */
         #loadingIndicator {
             position: fixed;
@@ -481,6 +502,14 @@
             color: #4b5563;
             z-index: 999;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none; /* Hide by default, only show if useful for debug */
+        }
+
+        #signOutButton {
+            position: absolute;
+            top: 1.5rem; /* Same as calendar-container padding */
+            right: 1.5rem; /* Same as calendar-container padding */
+            z-index: 10; /* Ensure it's above other elements if needed */
         }
     </style>
 </head>
@@ -503,7 +532,13 @@
             <div class="text-red-500 text-sm mt-1 hidden" id="passwordFeedback">
                 รหัสผ่านไม่ถูกต้อง
             </div>
-            <button class="btn btn-primary text-lg mt-3" id="startButton">เข้าสู่ระบบ</button>
+            <button class="btn btn-primary text-lg mt-3" id="startButton">เข้าสู่ระบบด้วยรหัสผ่าน</button>
+            
+            <div class="mt-4 text-gray-500">หรือ</div>
+            <button class="btn-google text-lg mt-3" id="googleSignInButton">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/2048px-Google_%22G%22_logo.svg.png" alt="Google logo" class="w-5 h-5">
+                เข้าสู่ระบบด้วย Google
+            </button>
         </div>
         <div class="footer-preapp">
             <span class="text-muted">V. 1.0.0 power by AI from Photo Team M.3</span>
@@ -512,6 +547,7 @@
 
     <div id="calendarAppMain">
         <div class="calendar-container">
+            <button class="btn btn-secondary" id="signOutButton">ออกจากระบบ</button>
             <div class="main-calendar-title">📅 ปฏิทินการปฏิบัติหน้าที่ของทีมช่างภาพ ม.3 📅</div>
             <div class="calendar-header">
                 <div class="flex items-center gap-4">
@@ -589,15 +625,16 @@
     <script type="module">
         // Import the functions you need from the SDKs you need
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+        import { getAuth, signInAnonymously, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
         import { getFirestore, collection, doc, getDocs, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 
-        const ACCESS_PASSWORD = '124356'; // รหัสผ่านสำหรับเข้าสู่ระบบ
+        const ACCESS_PASSWORD = '124356'; // รหัสผ่านสำหรับเข้าสู่ระบบ (ยังคงใช้ได้สำหรับ admin)
         const TEAM_WEBSITE_URL = 'https://prc-m3-photo-team.carrd.co/#staff-check-f'; // URL ของเว็บไซต์ทีมช่างภาพ
+        const SHARED_EVENTS_COLLECTION_PATH = "shared_team_events"; // ชื่อ Collection ใหม่สำหรับข้อมูลที่แชร์กัน
 
         // Firebase Configuration (from user's provided data)
         const firebaseConfig = {
-            apiKey: "AIzaSyDfNe8kGSTpXOO3lU8A-bH6ZClWVKz_BYc",
+            apiKey: "AIzaSyDfNe8kGSTpXOO3lU8A-bH6ZClWVKy_BYc",
             authDomain: "calender-photo-m3.firebaseapp.com",
             projectId: "calender-photo-m3",
             storageBucket: "calender-photo-m3.firebasestorage.app",
@@ -613,7 +650,7 @@
         let app;
         let db;
         let auth;
-        let currentUserId = null;
+        let currentUserId = null; // ยังคงเก็บ userId ไว้ แต่ไม่ได้ใช้ใน Firestore Path สำหรับ Shared Data แล้ว
         let isFirebaseReady = false;
 
         // Pre-App (Login) Screen Elements
@@ -622,6 +659,7 @@
         const togglePasswordVisibilityBtn = document.getElementById('togglePasswordVisibility');
         const passwordFeedback = document.getElementById('passwordFeedback');
         const startButton = document.getElementById('startButton');
+        const googleSignInButton = document.getElementById('googleSignInButton'); // ปุ่ม Google
 
         // Main Calendar App Elements
         const calendarAppMain = document.getElementById('calendarAppMain');
@@ -642,6 +680,7 @@
         const cancelAddEventBtn = document.getElementById('cancelAddEvent');
         const addEventButton = document.getElementById('addEventButton');
         const backToWebsiteBtn = document.getElementById('backToWebsiteBtn');
+        const signOutButton = document.getElementById('signOutButton'); // ปุ่มออกจากระบบ
 
         // Custom Message Modal Elements
         const customMessageModal = document.getElementById('customMessageModal');
@@ -671,6 +710,35 @@
         let currentActiveDate = new Date();
         let selectedDate = null;
         let allEvents = {}; // Changed to an object to store events grouped by dateKey for easier rendering
+
+        // ตัวอย่างวันสำคัญของไทยและวันหยุดราชการ
+        const predefinedHolidays = [
+            // วันหยุดราชการ (ตัวอย่างสำหรับปี 2025/2568 - อาจจะต้องปรับวันที่ให้ตรงกับปีปัจจุบันที่คุณใช้งาน)
+            { id: 'thai-new-year-2025', date: '2025-01-01', title: 'วันขึ้นปีใหม่', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' }, // สีแดง
+            { id: 'makha-bucha-2025', date: '2025-02-12', title: 'วันมาฆบูชา', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'chakri-day-2025', date: '2025-04-06', title: 'วันจักรี', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'songkran-13-2025', date: '2025-04-13', title: 'วันสงกรานต์', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'songkran-14-2025', date: '2025-04-14', title: 'วันสงกรานต์', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'songkran-15-2025', date: '2025-04-15', title: 'วันสงกรานต์', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'labour-day-2025', date: '2025-05-01', title: 'วันแรงงานแห่งชาติ', bookerName: 'วันหยุด (เอกชน/ธนาคาร)', time: '', description: '', color: '#f97316' }, // สีส้ม
+            { id: 'coronation-day-2025', date: '2025-05-04', title: 'วันฉัตรมงคล', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'visakha-bucha-2025', date: '2025-05-12', title: 'วันวิสาขบูชา', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'queen-suthida-2025', date: '2025-06-03', title: 'วันเฉลิมพระชนมพรรษาสมเด็จพระราชินี', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'king-rama10-2025', date: '2025-07-28', title: 'วันเฉลิมพระชนมพรรษา ร.10', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'mother-day-2025', date: '2025-08-12', title: 'วันแม่แห่งชาติ', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'chulalongkorn-day-2025', date: '2025-10-23', title: 'วันปิยมหาราช', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'father-day-2025', date: '2025-12-05', title: 'วันคล้ายวันพระบรมราชสมภพ ร.9 / วันพ่อแห่งชาติ', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'constitution-day-2025', date: '2025-12-10', title: 'วันรัฐธรรมนูญ', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+            { id: 'new-year-eve-2025', date: '2025-12-31', title: 'วันสิ้นปี', bookerName: 'วันหยุดราชการ', time: '', description: '', color: '#ef4444' },
+        ];
+
+        // ผนวกวันสำคัญเหล่านี้เข้ากับ allEvents
+        predefinedHolidays.forEach(event => {
+            if (!allEvents[event.date]) {
+                allEvents[event.date] = [];
+            }
+            allEvents[event.date].push(event);
+        });
 
 
         // Function to render color swatches in the modal
@@ -899,12 +967,13 @@
 
         // Setup Firestore listener for real-time updates
         function setupFirestoreListeners() {
-            if (!db || !currentUserId) {
-                console.error("Firestore or User ID not ready.");
+            if (!db) {
+                console.error("Firestore not ready.");
                 return;
             }
 
-            const eventsCollectionRef = collection(db, "artifacts", appId, "users", currentUserId, "events");
+            // เปลี่ยน path ของ Collection ให้เป็นแบบส่วนกลางที่แชร์กัน
+            const eventsCollectionRef = collection(db, SHARED_EVENTS_COLLECTION_PATH);
 
             onSnapshot(eventsCollectionRef, (snapshot) => {
                 const fetchedEvents = {};
@@ -916,12 +985,24 @@
                     }
                     fetchedEvents[dateKey].push(eventData);
                 });
-                allEvents = fetchedEvents; // Update the global events object
+                
+                // รวม predefined holidays กับข้อมูลจาก Firestore
+                allEvents = { ...fetchedEvents }; // เริ่มต้นด้วยข้อมูลจาก Firestore
+                predefinedHolidays.forEach(event => {
+                    if (!allEvents[event.date]) {
+                        allEvents[event.date] = [];
+                    }
+                    // เพิ่มวันหยุดราชการเข้าไป ถ้ายังไม่มี ID ซ้ำกัน (Firebase data จะมาก่อน)
+                    if (!allEvents[event.date].some(e => e.id === event.id)) {
+                        allEvents[event.date].push(event);
+                    }
+                });
+                
                 renderCalendar(); // Re-render calendar with new data
                 if (selectedDate) {
                     renderEventsForSelectedDay(); // Re-render modal events if open
                 }
-                // loadingIndicator.classList.add('hidden'); // This will be handled by the initial loading delay
+                loadingIndicator.classList.add('hidden'); // ซ่อน loading เมื่อโหลดข้อมูลเสร็จ
             }, (error) => {
                 console.error("Error fetching events: ", error);
                 showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลกำหนดการได้: ' + error.message);
@@ -932,7 +1013,7 @@
         // Add a new event to Firestore
         async function addEventToFirestore(eventData) {
             try {
-                await addDoc(collection(db, "artifacts", appId, "users", currentUserId, "events"), eventData);
+                await addDoc(collection(db, SHARED_EVENTS_COLLECTION_PATH), eventData);
             } catch (e) {
                 console.error("Error adding document: ", e);
                 await showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถเพิ่มงานได้: ' + e.message);
@@ -942,7 +1023,7 @@
         // Update an existing event in Firestore
         async function updateEventInFirestore(eventId, eventData) {
             try {
-                await setDoc(doc(db, "artifacts", appId, "users", currentUserId, "events", eventId), eventData, { merge: true });
+                await setDoc(doc(db, SHARED_EVENTS_COLLECTION_PATH, eventId), eventData, { merge: true });
             } catch (e) {
                 console.error("Error updating document: ", e);
                 await showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถแก้ไขงานได้: ' + e.message);
@@ -952,7 +1033,7 @@
         // Delete an event from Firestore
         async function deleteEventFromFirestore(eventId) {
             try {
-                await deleteDoc(doc(db, "artifacts", appId, "users", currentUserId, "events", eventId));
+                await deleteDoc(doc(db, SHARED_EVENTS_COLLECTION_PATH, eventId));
             } catch (e) {
                 console.error("Error deleting document: ", e);
                 await showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถลบงานได้: ' + e.message);
@@ -962,7 +1043,7 @@
 
         // --- Event Listeners ---
 
-        // Login Screen Logic
+        // Firebase Initialization and Authentication Logic
         document.addEventListener('DOMContentLoaded', async () => {
             // Initialize Firebase App
             app = initializeApp(firebaseConfigFromCanvas);
@@ -975,24 +1056,19 @@
             // Handle authentication state changes
             onAuthStateChanged(auth, async (user) => {
                 if (user) {
-                    currentUserId = user.uid;
-                    userIdDisplay.textContent = `User ID: ${currentUserId}`;
+                    currentUserId = user.uid; // เก็บ userId ไว้เผื่อใช้ในอนาคต แต่ไม่ได้ใช้กับ Firestore path แล้ว
+                    userIdDisplay.textContent = `User ID: ${currentUserId}`; // สามารถแสดง debug ได้
                     isFirebaseReady = true;
+                    // เมื่อผู้ใช้ล็อกอินสำเร็จ ให้แสดงปฏิทินและซ่อนหน้าล็อกอิน
+                    preAppScreen.style.display = 'none';
+                    calendarAppMain.style.display = 'flex';
                     setupFirestoreListeners(); // Setup listeners after user is authenticated
                 } else {
-                    // Sign in anonymously if no user is logged in
-                    try {
-                        // Use __initial_auth_token if available, otherwise sign in anonymously
-                        if (typeof __initial_auth_token !== 'undefined') {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (error) {
-                        console.error("Error signing in:", error);
-                        showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถเข้าสู่ระบบได้: ' + error.message);
-                        loadingIndicator.classList.add('hidden');
-                    }
+                    // ถ้าผู้ใช้ยังไม่ได้ล็อกอิน ให้แสดงหน้าล็อกอินและซ่อนปฏิทิน
+                    preAppScreen.style.display = 'flex';
+                    calendarAppMain.style.display = 'none';
+                    loadingIndicator.classList.add('hidden'); // ซ่อน loading ถ้ายังไม่ได้ล็อกอิน
+                    // ไม่มีการ signInAnonymously อัตโนมัติแล้ว
                 }
             });
 
@@ -1018,20 +1094,51 @@
                 });
             }
 
-            // Start button click
+            // Start button (Password Login) click
             startButton.addEventListener('click', () => {
                 if (passwordInput.value === ACCESS_PASSWORD) {
+                    // สำหรับ admin ที่ใช้รหัสผ่าน เมื่อเข้ามาแล้วจะถือว่า Authenticated
+                    // ในบริบทนี้ จะถือว่าเป็นการเข้าสู่ระบบสำเร็จและ Firebase Auth state จะเปลี่ยนไป
+                    // แต่เนื่องจาก Firebase Auth ไม่มีวิธี "authenticate" ด้วยรหัสผ่านแบบง่ายๆ ในฝั่ง client
+                    // หากต้องการใช้ระบบ admin password จริงๆ จะต้องมี server-side หรือ Firebase Functions
+                    // เพื่อสร้าง Custom Token แล้วใช้ signInWithCustomToken(auth, token)
+                    // สำหรับตอนนี้ เราจะแค่แสดงปฏิทินโดยไม่เกี่ยวข้องกับ Firebase Auth state โดยตรง
+                    // แต่เพื่อประโยชน์ในการซิงค์ข้อมูล แนะนำให้ admin ล็อกอินด้วย Google แทน
+                    // หรือใช้รหัสผ่านเพื่อเข้าสู่ระบบปฏิทินที่ไม่ต้องซิงค์
+                    // แต่ถ้าต้องการให้ admin password ล็อกอินแล้วซิงค์ข้อมูลกับคนอื่นได้
+                    // คนที่ล็อกอินด้วยรหัสผ่านก็ควรมีการยืนยันตัวตนด้วย Firebase Auth เช่นกัน
+                    
+                    // **NOTE:** สำหรับตอนนี้ การเข้าสู่ระบบด้วยรหัสผ่านจะแค่แสดงหน้าปฏิทิน
+                    // แต่ข้อมูลจะไม่ซิงค์กับคนอื่นที่ล็อกอินด้วย Google หาก Firebase Auth State ไม่ได้เปลี่ยนไป
+                    // ทางที่ดีที่สุดคือให้ admin ใช้ Google Sign-In ด้วยเช่นกัน
+
                     preAppScreen.style.display = 'none';
-                    // Show loading indicator again before calendar display
-                    loadingIndicator.classList.remove('hidden'); 
-                    setTimeout(() => {
-                        calendarAppMain.style.display = 'flex';
-                        loadingIndicator.classList.add('hidden');
-                        // renderCalendar() is now called by onSnapshot
-                    }, 3000); // 3-second delay
+                    calendarAppMain.style.display = 'flex';
+                    loadingIndicator.classList.add('hidden'); // ซ่อน loading เมื่อเข้าได้
+                    setupFirestoreListeners(); // โหลดข้อมูลปฏิทิน
                     passwordFeedback.classList.add('hidden');
                 } else {
                     passwordFeedback.classList.remove('hidden');
+                }
+            });
+
+            // Google Sign-In Button click
+            googleSignInButton.addEventListener('click', async () => {
+                const provider = new GoogleAuthProvider();
+                try {
+                    loadingIndicator.classList.remove('hidden');
+                    await signInWithPopup(auth, provider);
+                    // onAuthStateChanged จะจัดการการแสดงผลปฏิทินหลังจากล็อกอินสำเร็จ
+                } catch (error) {
+                    console.error("Error during Google Sign-in: ", error);
+                    let errorMessage = "เกิดข้อผิดพลาดในการเข้าสู่ระบบด้วย Google";
+                    if (error.code === 'auth/popup-closed-by-user') {
+                        errorMessage = "คุณปิดหน้าต่างเข้าสู่ระบบก่อนที่จะเสร็จสิ้น";
+                    } else if (error.code === 'auth/cancelled-popup-request') {
+                        errorMessage = "มีคำขอเข้าสู่ระบบ Google ซ้อนกัน โปรดลองอีกครั้ง";
+                    }
+                    await showCustomMessage('ข้อผิดพลาด', errorMessage + ": " + error.message);
+                    loadingIndicator.classList.add('hidden');
                 }
             });
 
@@ -1074,11 +1181,11 @@
             const selectedColor = document.querySelector('input[name="eventColor"]:checked')?.value || DEFAULT_EVENT_COLOR;
 
             if (!title) {
-                await showCustomMessage('ข้อผิดพลาด', 'กรุณากรอกชื่องาน!');
+                await showCustomMessage('ข้อผิดพลาด', 'กรุณากรอกชื่องาน <span class="text-red-500">*</span>');
                 return;
             }
             if (!bookerName) {
-                await showCustomMessage('ข้อผิดพลาด', 'กรุณากรอกชื่อผู้จอง!');
+                await showCustomMessage('ข้อผิดพลาด', 'กรุณากรอกชื่อผู้จอง <span class="text-red-500">*</span>');
                 return;
             }
 
@@ -1088,7 +1195,8 @@
                 bookerName,
                 time,
                 description,
-                color: selectedColor
+                color: selectedColor,
+                // สามารถเพิ่มข้อมูลผู้สร้าง/แก้ไขงานได้ เช่น createdBy: auth.currentUser.email
             };
 
             const editingId = eventForm.dataset.editingId;
@@ -1136,6 +1244,17 @@
         // Event Listener for the new "Back to Website" button
         backToWebsiteBtn.addEventListener('click', () => {
             window.location.href = TEAM_WEBSITE_URL;
+        });
+
+        // Sign Out Button
+        signOutButton.addEventListener('click', async () => {
+            try {
+                await signOut(auth);
+                // onAuthStateChanged จะจัดการการแสดงหน้าล็อกอินหลังจากออกจากระบบ
+            } catch (error) {
+                console.error("Error signing out:", error);
+                await showCustomMessage('ข้อผิดพลาด', 'ไม่สามารถออกจากระบบได้: ' + error.message);
+            }
         });
 
     </script>
